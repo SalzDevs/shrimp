@@ -140,8 +140,14 @@ Native desktop app (`src/gui.zig`, all-Zig + raylib, cross-platform):
 - Note: raylib 5.5 init crashed once flakily in this session (GLFW monitor
   detection race, not app code); `--smoke` is the regression check.
 
-Future GUI polish: hex-dump view, native save/open dialogs
-(tinyfiledialogs), recent-files list, .shrimp block map visualization,
+GUI v2 (redesign): bundled Inter + JetBrains Mono fonts with `DrawTextEx`
+rendering; shrimp-brand theme (warm dark + coral #FF6B5E, semantic
+green/amber/red); inspect-first layout with `[+] details` progressive
+disclosure (histogram, run stats, adaptive-row hex view); resizable window
+(min 800×560, stretching bars, clip guards).
+
+Future GUI polish: native save/open dialogs (tinyfiledialogs),
+recent-files list, .shrimp block map visualization, scrolling details,
 app bundling (.app + icon).
 
 ### Phase 5 — LZ77 (next, if ratio still matters)

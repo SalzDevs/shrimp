@@ -111,24 +111,42 @@ pub const ByteStats = struct {
     }
 };
 
-/// Classic hex viewer format: offset, 16 hex bytes (split at the half),
-/// ASCII gutter.
+/// Format one hex dump row into `buf` (no trailing newline): offset, 16
+/// hex bytes (split at the half), ASCII gutter. `buf` needs 80 bytes.
+pub fn hexRow(buf: []u8, row: []const u8, offset: u64) []const u8 {
+    var n: usize = 0;
+    n += (std.fmt.bufPrint(buf[n..], "{x:0>8}  ", .{offset}) catch unreachable).len;
+    for (0..16) |j| {
+        if (j == 8) {
+            buf[n] = ' ';
+            n += 1;
+        }
+        if (j < row.len) {
+            n += (std.fmt.bufPrint(buf[n..], "{x:0>2} ", .{row[j]}) catch unreachable).len;
+        } else {
+            @memcpy(buf[n..][0..3], "   ");
+            n += 3;
+        }
+    }
+    @memcpy(buf[n..][0..2], " |");
+    n += 2;
+    for (row) |b| {
+        buf[n] = if (std.ascii.isPrint(b)) b else '.';
+        n += 1;
+    }
+    buf[n] = '|';
+    n += 1;
+    return buf[0..n];
+}
+
+/// Classic hex viewer format, one `hexRow` per line.
 pub fn hexDump(w: *std.Io.Writer, bytes: []const u8, base_offset: u64) !void {
+    var buf: [80]u8 = undefined;
     var i: usize = 0;
     while (i < bytes.len) : (i += 16) {
         const row = bytes[i..@min(i + 16, bytes.len)];
-        try w.print("{x:0>8}  ", .{base_offset + i});
-        for (0..16) |j| {
-            if (j == 8) try w.writeByte(' ');
-            if (j < row.len) {
-                try w.print("{x:0>2} ", .{row[j]});
-            } else {
-                try w.writeAll("   ");
-            }
-        }
-        try w.writeAll(" |");
-        for (row) |b| try w.writeByte(if (std.ascii.isPrint(b)) b else '.');
-        try w.writeAll("|\n");
+        try w.writeAll(hexRow(&buf, row, base_offset + i));
+        try w.writeByte('\n');
     }
 }
 

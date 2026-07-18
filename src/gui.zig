@@ -110,6 +110,8 @@ const Result = struct {
 
 const PlainView = struct {
     stats: shrimp.inspect.ByteStats,
+    dump: [256]u8 = undefined,
+    dump_len: usize = 0,
     result: ?Result = null,
 };
 
@@ -153,12 +155,17 @@ const App = struct {
         @memcpy(self.path_buf[0..p.len], p);
         self.path_len = p.len;
 
-        const analysis = shrimp.inspect.analyzePath(self.io, self.path(), &.{}) catch |e| {
+        var dump: [256]u8 = undefined;
+        const analysis = shrimp.inspect.analyzePath(self.io, self.path(), &dump) catch |e| {
             self.fail(@errorName(e));
             return;
         };
         switch (analysis) {
-            .plain => |pl| self.view = .{ .plain = .{ .stats = pl.stats } },
+            .plain => |pl| {
+                var pv: PlainView = .{ .stats = pl.stats, .dump_len = pl.dump.len };
+                @memcpy(pv.dump[0..pl.dump.len], pl.dump);
+                self.view = .{ .plain = pv };
+            },
             .shrimp => |st| self.view = .{ .shrimp = .{ .stats = st } },
         }
     }
@@ -320,6 +327,25 @@ const App = struct {
             drawText(fonts.mono, pad, y, 13, dim, "{d} rle - {d} huffman - {d} raw blocks", .{
                 v.stats.predicted_rle_blocks, v.stats.predicted_huffman_blocks, v.stats.predicted_raw_blocks,
             });
+            y += 32;
+        }
+
+        // Hex view: as many rows as fit above the clip guard.
+        if (v.dump_len > 0) {
+            const avail_rows = @divTrunc(wh - 70 - y, 19);
+            const total_rows: i32 = @intCast(@divTrunc(v.dump_len + 15, 16));
+            const rows: usize = @intCast(@max(0, @min(avail_rows, total_rows)));
+            if (rows > 0) {
+                drawText(fonts.ui, pad, y, 15, dim, "first {d} bytes (hex)", .{@min(rows * 16, v.dump_len)});
+                y += 26;
+                var row_buf: [80]u8 = undefined;
+                for (0..rows) |r| {
+                    const start = r * 16;
+                    const row = v.dump[start..@min(start + 16, v.dump_len)];
+                    drawText(fonts.mono, pad, y, 13, dim, "{s}", .{shrimp.inspect.hexRow(&row_buf, row, start)});
+                    y += 19;
+                }
+            }
         }
     }
 
@@ -489,6 +515,7 @@ pub fn main(init: std.process.Init) !void {
 
     var app: App = .{ .io = init.io, .gpa = init.gpa };
     if (initial) |p| app.loadPath(p);
+    if (smoke) app.details_open = true; // exercise the details/hex drawing paths
 
     var frames: u32 = 0;
     while (!rl.WindowShouldClose()) {
