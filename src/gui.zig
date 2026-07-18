@@ -9,6 +9,21 @@ const W = 860;
 const H = 640;
 const pad = 28;
 
+const inter_ttf = @embedFile("fonts/Inter.ttf");
+const mono_ttf = @embedFile("fonts/JetBrainsMono.ttf");
+
+const Fonts = struct { ui: rl.Font, mono: rl.Font };
+var fonts: Fonts = undefined;
+
+/// Load a TTF baked at 64px (scaled down per draw call). Falls back to
+/// raylib's built-in font if loading fails.
+fn loadFont(data: []const u8) rl.Font {
+    const f = rl.LoadFontFromMemory(".ttf", data.ptr, @intCast(data.len), 64, null, 0);
+    if (f.texture.id == 0) return rl.GetFontDefault();
+    rl.SetTextureFilter(f.texture, rl.TEXTURE_FILTER_BILINEAR);
+    return f;
+}
+
 fn col(r: u8, g: u8, b: u8) rl.Color {
     return .{ .r = r, .g = g, .b = b, .a = 255 };
 }
@@ -39,11 +54,11 @@ fn verdictColor(h: f64) rl.Color {
 }
 
 /// Format and draw text in one call (all rendering goes through here so
-/// strings stay ASCII-safe for raylib's default font).
-fn drawText(x: i32, y: i32, size: i32, color: rl.Color, comptime fmt: []const u8, args: anytype) void {
+/// strings stay ASCII-safe for the loaded fonts).
+fn drawText(font: rl.Font, x: i32, y: i32, size: i32, color: rl.Color, comptime fmt: []const u8, args: anytype) void {
     var b: [512]u8 = undefined;
     const s = std.fmt.bufPrintZ(&b, fmt, args) catch return;
-    rl.DrawText(s.ptr, x, y, size, color);
+    rl.DrawTextEx(font, s.ptr, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }, @floatFromInt(size), 0, color);
 }
 
 fn commas(buf: []u8, value: u64) []const u8 {
@@ -73,12 +88,13 @@ fn button(rect: rl.Rectangle, label: []const u8, color: rl.Color) bool {
 
     const hover = rl.CheckCollisionPointRec(rl.GetMousePosition(), rect);
     rl.DrawRectangleRounded(rect, 0.3, 8, if (hover) lighten(color) else color);
-    const tw = rl.MeasureText(s.ptr, 16);
-    rl.DrawText(
+    const m = rl.MeasureTextEx(fonts.ui, s.ptr, 16, 0);
+    rl.DrawTextEx(
+        fonts.ui,
         s.ptr,
-        @intFromFloat(rect.x + (rect.width - @as(f32, @floatFromInt(tw))) / 2),
-        @intFromFloat(rect.y + (rect.height - 16) / 2),
+        .{ .x = rect.x + (rect.width - m.x) / 2, .y = rect.y + (rect.height - 16) / 2 },
         16,
+        0,
         bg,
     );
     return hover and rl.IsMouseButtonPressed(rl.MOUSE_BUTTON_LEFT);
@@ -209,13 +225,13 @@ const App = struct {
             .shrimp => |*v| self.drawShrimp(v),
             .failure => |msg| drawFailure(msg),
         }
-        drawText(W - pad - 90, H - 26, 12, dim, "esc to quit", .{});
+        drawText(fonts.ui, W - pad - 90, H - 26, 12, dim, "esc to quit", .{});
     }
 
     fn drawHeader(self: *App) void {
-        drawText(pad, 24, 28, accent, "shrimp", .{});
+        drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
         if (self.view != .empty) {
-            drawText(W - pad - 220, 34, 13, dim, "drop another file to replace", .{});
+            drawText(fonts.ui, W - pad - 220, 34, 13, dim, "drop another file to replace", .{});
         }
     }
 
@@ -224,49 +240,49 @@ const App = struct {
         var y: i32 = 76;
         var cb: [40]u8 = undefined;
 
-        drawText(pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
+        drawText(fonts.mono, pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
         y += 28;
-        drawText(pad, y, 14, dim, "{s} bytes", .{commas(&cb, v.stats.total_bytes)});
+        drawText(fonts.mono, pad, y, 14, dim, "{s} bytes", .{commas(&cb, v.stats.total_bytes)});
         y += 34;
 
         if (v.stats.total_bytes == 0) {
-            drawText(pad, y, 16, dim, "empty file", .{});
+            drawText(fonts.ui, pad, y, 16, dim, "empty file", .{});
             y += 30;
         } else {
             const h = v.stats.entropy();
-            drawText(pad, y, 15, dim, "entropy", .{});
+            drawText(fonts.ui, pad, y, 15, dim, "entropy", .{});
             bar(pad + 130, y + 2, 330, 14, @floatCast(h / 8.0), verdictColor(h));
-            drawText(pad + 476, y - 1, 15, text_col, "{d:.2} bits/byte - {s}", .{ h, shrimp.inspect.entropyVerdict(h) });
+            drawText(fonts.mono, pad + 476, y - 1, 15, text_col, "{d:.2} bits/byte - {s}", .{ h, shrimp.inspect.entropyVerdict(h) });
             y += 42;
 
-            drawText(pad, y, 15, dim, "most common bytes", .{});
+            drawText(fonts.ui, pad, y, 15, dim, "most common bytes", .{});
             y += 26;
             var top: [8]shrimp.inspect.ByteCount = undefined;
             const tops = shrimp.inspect.topBytes(&v.stats.histogram, &top);
             const maxc: f64 = @floatFromInt(tops[0].count);
             for (tops) |e| {
                 const p = @as(f64, @floatFromInt(e.count)) / @as(f64, @floatFromInt(v.stats.total_bytes)) * 100.0;
-                drawText(pad, y, 14, text_col, "0x{x:0>2} '{c}'", .{ e.byte, if (std.ascii.isPrint(e.byte)) e.byte else '.' });
+                drawText(fonts.mono, pad, y, 14, text_col, "0x{x:0>2} '{c}'", .{ e.byte, if (std.ascii.isPrint(e.byte)) e.byte else '.' });
                 bar(pad + 110, y + 2, 330, 12, @floatCast(@as(f64, @floatFromInt(e.count)) / maxc), accent);
-                drawText(pad + 456, y, 14, dim, "{d:.1}%", .{p});
+                drawText(fonts.mono, pad + 456, y, 14, dim, "{d:.1}%", .{p});
                 y += 24;
             }
             y += 18;
 
             var cb2: [40]u8 = undefined;
             var cb3: [40]u8 = undefined;
-            drawText(pad, y, 14, dim, "bit runs: {s} - avg {d:.1} bits - longest {s} bits", .{
+            drawText(fonts.mono, pad, y, 14, dim, "bit runs: {s} - avg {d:.1} bits - longest {s} bits", .{
                 commas(&cb, v.stats.total_runs),
                 v.stats.avgRunBits(),
                 commas(&cb2, v.stats.longest_run),
             });
             y += 28;
-            drawText(pad, y, 15, text_col, "shrinks to {s} bytes ({d:.1}%)", .{
+            drawText(fonts.mono, pad, y, 15, text_col, "shrinks to {s} bytes ({d:.1}%)", .{
                 commas(&cb3, v.stats.predicted_bytes),
                 pct(v.stats.predicted_bytes, v.stats.total_bytes),
             });
             y += 22;
-            drawText(pad, y, 13, dim, "{d} rle - {d} huffman - {d} raw blocks", .{
+            drawText(fonts.mono, pad, y, 13, dim, "{d} rle - {d} huffman - {d} raw blocks", .{
                 v.stats.predicted_rle_blocks, v.stats.predicted_huffman_blocks, v.stats.predicted_raw_blocks,
             });
             y += 34;
@@ -288,26 +304,26 @@ const App = struct {
         var cb: [40]u8 = undefined;
         var cb2: [40]u8 = undefined;
 
-        drawText(pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
+        drawText(fonts.mono, pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
         y += 28;
-        drawText(pad, y, 14, dim, ".shrimp container (v{d})", .{shrimp.format.version});
+        drawText(fonts.ui, pad, y, 14, dim, ".shrimp container (v{d})", .{shrimp.format.version});
         y += 40;
 
-        drawText(pad, y, 15, dim, "original", .{});
-        drawText(pad + 130, y, 15, text_col, "{s} bytes", .{commas(&cb, v.stats.output_bytes)});
+        drawText(fonts.ui, pad, y, 15, dim, "original", .{});
+        drawText(fonts.mono, pad + 130, y, 15, text_col, "{s} bytes", .{commas(&cb, v.stats.output_bytes)});
         y += 28;
-        drawText(pad, y, 15, dim, "compressed", .{});
-        drawText(pad + 130, y, 15, text_col, "{s} bytes ({d:.1}%)", .{
+        drawText(fonts.ui, pad, y, 15, dim, "compressed", .{});
+        drawText(fonts.mono, pad + 130, y, 15, text_col, "{s} bytes ({d:.1}%)", .{
             commas(&cb2, v.stats.input_bytes), pct(v.stats.input_bytes, v.stats.output_bytes),
         });
         y += 28;
-        drawText(pad, y, 15, dim, "blocks", .{});
-        drawText(pad + 130, y, 15, text_col, "{d} rle - {d} huffman - {d} raw", .{
+        drawText(fonts.ui, pad, y, 15, dim, "blocks", .{});
+        drawText(fonts.mono, pad + 130, y, 15, text_col, "{d} rle - {d} huffman - {d} raw", .{
             v.stats.rle_blocks, v.stats.huffman_blocks, v.stats.raw_blocks,
         });
         y += 28;
-        drawText(pad, y, 15, dim, "integrity", .{});
-        drawText(pad + 130, y, 15, green, "checksum ok", .{});
+        drawText(fonts.ui, pad, y, 15, dim, "integrity", .{});
+        drawText(fonts.ui, pad + 130, y, 15, green, "checksum ok", .{});
         y += 46;
 
         var lb: [300]u8 = undefined;
@@ -357,33 +373,33 @@ fn verifyRoundTrip(io: std.Io, gpa: std.mem.Allocator, src_path: []const u8, shr
 }
 
 fn drawEmpty() void {
-    drawText(pad, 24, 28, accent, "shrimp", .{});
-    drawText(pad, 58, 13, dim, "binary file compressor and inspector", .{});
+    drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
+    drawText(fonts.ui, pad, 58, 13, dim, "binary file compressor and inspector", .{});
 
     const rect: rl.Rectangle = .{ .x = pad, .y = 150, .width = W - 2 * pad, .height = 300 };
     rl.DrawRectangleRounded(rect, 0.06, 12, panel);
     rl.DrawRectangleRoundedLines(rect, 0.06, 12, border);
 
-    drawText(W / 2 - 130, 270, 24, text_col, "Drop a file here", .{});
-    drawText(W / 2 - 150, 310, 14, dim, "any file is analyzed the moment it lands", .{});
-    drawText(W / 2 - 160, 380, 13, dim, "entropy - histogram - predicted compressed size", .{});
+    drawText(fonts.ui, W / 2 - 130, 270, 24, text_col, "Drop a file here", .{});
+    drawText(fonts.ui, W / 2 - 150, 310, 14, dim, "any file is analyzed the moment it lands", .{});
+    drawText(fonts.ui, W / 2 - 160, 380, 13, dim, "entropy - histogram - predicted compressed size", .{});
 }
 
 fn drawFailure(msg: []const u8) void {
-    drawText(pad, 24, 28, accent, "shrimp", .{});
+    drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
     const rect: rl.Rectangle = .{ .x = pad, .y = 200, .width = W - 2 * pad, .height = 120 };
     rl.DrawRectangleRounded(rect, 0.08, 12, panel);
     rl.DrawRectangle(pad, 200, 4, 120, red);
-    drawText(pad + 20, 232, 17, red, "could not read that file", .{});
-    drawText(pad + 20, 264, 15, text_col, "{s}", .{msg});
-    drawText(pad + 20, 296, 13, dim, "drop another file to try again", .{});
+    drawText(fonts.ui, pad + 20, 232, 17, red, "could not read that file", .{});
+    drawText(fonts.mono, pad + 20, 264, 15, text_col, "{s}", .{msg});
+    drawText(fonts.ui, pad + 20, 296, 13, dim, "drop another file to try again", .{});
 }
 
 fn drawResult(y: i32, r: *const Result) void {
     const c = if (r.ok) green else red;
     rl.DrawRectangle(pad, y, W - 2 * pad, 48, panel);
     rl.DrawRectangle(pad, y, 4, 48, c);
-    drawText(pad + 16, y + 15, 15, text_col, "{s}", .{r.text[0..r.len]});
+    drawText(fonts.mono, pad + 16, y + 15, 15, text_col, "{s}", .{r.text[0..r.len]});
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -403,6 +419,13 @@ pub fn main(init: std.process.Init) !void {
     rl.InitWindow(W, H, "shrimp");
     defer rl.CloseWindow();
     rl.SetTargetFPS(60);
+
+    fonts = .{ .ui = loadFont(inter_ttf), .mono = loadFont(mono_ttf) };
+    defer {
+        const default_id = rl.GetFontDefault().texture.id;
+        if (fonts.ui.texture.id != default_id) rl.UnloadFont(fonts.ui);
+        if (fonts.mono.texture.id != default_id) rl.UnloadFont(fonts.mono);
+    }
 
     var app: App = .{ .io = init.io, .gpa = init.gpa };
     if (initial) |p| app.loadPath(p);
