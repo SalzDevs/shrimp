@@ -132,12 +132,87 @@ pub fn hexDump(w: *std.Io.Writer, bytes: []const u8, base_offset: u64) !void {
     }
 }
 
-fn entropyVerdict(h: f64) []const u8 {
+/// Plain-English reading of a bits-per-byte entropy value.
+pub fn entropyVerdict(h: f64) []const u8 {
     if (h < 1.0) return "extremely repetitive";
     if (h < 4.0) return "compressible";
     if (h < 6.0) return "mixed content";
     if (h < 7.5) return "hard to compress";
     return "likely random or already compressed";
+}
+
+pub const ByteCount = struct { byte: u8, count: u64 };
+
+/// The `out.len` most common bytes, most frequent first (zero counts
+/// excluded).
+pub fn topBytes(histogram: *const [256]u64, out: []ByteCount) []ByteCount {
+    var entries: [256]ByteCount = undefined;
+    for (&entries, 0..) |*e, i| e.* = .{ .byte = @intCast(i), .count = histogram[i] };
+    std.mem.sort(ByteCount, &entries, {}, struct {
+        fn desc(_: void, a: ByteCount, b: ByteCount) bool {
+            return a.count > b.count;
+        }
+    }.desc);
+
+    var n: usize = 0;
+    for (entries) |e| {
+        if (e.count == 0 or n == out.len) break;
+        out[n] = e;
+        n += 1;
+    }
+    return out[0..n];
+}
+
+/// The result of analyzing a file on disk: either a plain file (with
+/// statistics) or a verified `.shrimp` container.
+pub const Analysis = union(enum) {
+    plain: Plain,
+    shrimp: format.Stats,
+
+    pub const Plain = struct {
+        stats: ByteStats,
+        /// First bytes of the file, as many as fit in the caller's buffer.
+        dump: []const u8,
+    };
+};
+
+/// Sniff the magic bytes and analyze `path` accordingly. For `.shrimp`
+/// files this performs a full decode pass, so a returned `.shrimp` analysis
+/// is structurally valid with a verified checksum. Up to `dump_buf.len` of
+/// the first bytes of a plain file are copied into `dump_buf`.
+pub fn analyzePath(io: std.Io, path: []const u8, dump_buf: []u8) !Analysis {
+    const cwd = std.Io.Dir.cwd();
+
+    const file = try cwd.openFile(io, path, .{});
+    defer file.close(io);
+
+    var magic_buf: [format.magic.len]u8 = undefined;
+    const magic_n = try file.readPositionalAll(io, &magic_buf, 0);
+
+    if (magic_n == magic_buf.len and std.mem.eql(u8, &magic_buf, format.magic)) {
+        var read_buf: [8192]u8 = undefined;
+        var fr = file.reader(io, &read_buf);
+        var sink: std.Io.Writer.Discarding = .init(&.{});
+        const stats = try format.decompressStream(&fr.interface, &sink.writer);
+        return .{ .shrimp = stats };
+    }
+
+    var stats: ByteStats = .{};
+    var dump_len: usize = 0;
+    var chunk: [format.chunk_size]u8 = undefined;
+    var offset: u64 = 0;
+    while (true) {
+        const n = try file.readPositionalAll(io, &chunk, offset);
+        if (n == 0) break;
+        if (dump_len < dump_buf.len) {
+            const keep = @min(dump_buf.len - dump_len, n);
+            @memcpy(dump_buf[dump_len..][0..keep], chunk[0..keep]);
+            dump_len += keep;
+        }
+        stats.update(chunk[0..n]);
+        offset += n;
+    }
+    return .{ .plain = .{ .stats = stats, .dump = dump_buf[0..dump_len] } };
 }
 
 /// Report for a plain (uncompressed) file.
@@ -159,19 +234,11 @@ pub fn renderReport(
     const h = stats.entropy();
     try w.print("\nentropy: {d:.2} bits/byte — {s}\n", .{ h, entropyVerdict(h) });
 
-    const Entry = struct { byte: u8, count: u64 };
-    var entries: [256]Entry = undefined;
-    for (&entries, 0..) |*e, i| e.* = .{ .byte = @intCast(i), .count = stats.histogram[i] };
-    std.mem.sort(Entry, &entries, {}, struct {
-        fn desc(_: void, a: Entry, b: Entry) bool {
-            return a.count > b.count;
-        }
-    }.desc);
-
     try w.writeAll("top bytes:\n");
-    const top_count = entries[0].count;
-    for (entries[0..8]) |e| {
-        if (e.count == 0) break;
+    var top: [8]ByteCount = undefined;
+    const top_slice = topBytes(&stats.histogram, &top);
+    const top_count = top_slice[0].count;
+    for (top_slice) |e| {
         const pct = @as(f64, @floatFromInt(e.count)) /
             @as(f64, @floatFromInt(stats.total_bytes)) * 100.0;
         const bar_len: usize = @intFromFloat(@as(f64, @floatFromInt(e.count)) /

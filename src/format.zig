@@ -179,6 +179,68 @@ pub fn decompressStream(r: *std.Io.Reader, w: *std.Io.Writer) !Stats {
     return stats;
 }
 
+/// Compress the file at `input_path` to a new file at `output_path`
+/// (two passes: checksum pre-pass, then block stream).
+pub fn compressFile(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    input_path: []const u8,
+    output_path: []const u8,
+) !Stats {
+    const cwd = std.Io.Dir.cwd();
+
+    const input = try cwd.openFile(io, input_path, .{});
+    defer input.close(io);
+
+    const size = (try input.stat(io)).size;
+
+    // First pass: checksum the input (the header is written before the
+    // blocks, so the checksum has to be known up front).
+    var chunk: [chunk_size]u8 = undefined;
+    var crc = std.hash.Crc32.init();
+    var offset: u64 = 0;
+    while (true) {
+        const n = try input.readPositionalAll(io, &chunk, offset);
+        if (n == 0) break;
+        crc.update(chunk[0..n]);
+        offset += n;
+    }
+
+    // Second pass: write the container.
+    const output = try cwd.createFile(io, output_path, .{});
+    defer output.close(io);
+
+    var read_buf: [4096]u8 = undefined;
+    var fr = input.reader(io, &read_buf);
+    var write_buf: [8192]u8 = undefined;
+    var fw = output.writer(io, &write_buf);
+
+    const stats = try compressStream(gpa, &fr.interface, &fw.interface, size, crc.final());
+    try fw.interface.flush();
+    return stats;
+}
+
+/// Decompress the `.shrimp` file at `input_path` to a new file at
+/// `output_path`, verifying the checksum.
+pub fn decompressFile(io: std.Io, input_path: []const u8, output_path: []const u8) !Stats {
+    const cwd = std.Io.Dir.cwd();
+
+    const input = try cwd.openFile(io, input_path, .{});
+    defer input.close(io);
+
+    const output = try cwd.createFile(io, output_path, .{});
+    defer output.close(io);
+
+    var read_buf: [8192]u8 = undefined;
+    var fr = input.reader(io, &read_buf);
+    var write_buf: [8192]u8 = undefined;
+    var fw = output.writer(io, &write_buf);
+
+    const stats = try decompressStream(&fr.interface, &fw.interface);
+    try fw.interface.flush();
+    return stats;
+}
+
 fn readIntLe(r: *std.Io.Reader, comptime T: type) !T {
     const bytes = try r.take(@sizeOf(T));
     return std.mem.readInt(T, bytes[0..@sizeOf(T)], .little);

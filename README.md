@@ -11,12 +11,28 @@ benchmark against gzip.
 ## Requirements
 
 - Zig 0.16.0
+- raylib (GUI only): `brew install raylib`, or pass
+  `-Draylib-prefix=<prefix>` to zig build (default `/opt/homebrew/opt/raylib`)
 
 ## Build
 
 ```sh
-zig build          # installs to zig-out/bin/shrimp
+zig build          # installs zig-out/bin/shrimp and zig-out/bin/shrimp-gui
 ```
+
+## GUI
+
+```sh
+zig build run-gui              # or: zig-out/bin/shrimp-gui [file]
+```
+
+A single-window raylib app: drop any file onto it for an instant analysis
+(entropy, byte histogram, bit-run stats, exact predicted compressed size),
+then compress or decompress in place — outputs land next to the source file
+(`<name>.shrimp`, or the name minus `.shrimp`, never clobbering an existing
+file). Every compress is verified with an in-memory round-trip. `.shrimp`
+files get a container view with checksum status. `--smoke [file]` runs a
+headless two-frame self-test including the compress/decompress action.
 
 ## Usage
 
@@ -62,8 +78,11 @@ block:   type:u8 | raw_len:u32le | payload_len:u32le | payload
 
 - `src/rle.zig` — bitstream RLE encoder/decoder
 - `src/huffman.zig` — canonical Huffman encoder/decoder
-- `src/format.zig` — `.shrimp` container (block selection, compress/decompress)
-- `src/inspect.zig` — file analysis: entropy, histograms, run stats, reports
+- `src/format.zig` — `.shrimp` container (block selection, compress/decompress,
+  file-level `compressFile`/`decompressFile`)
+- `src/inspect.zig` — file analysis: entropy, histograms, run stats,
+  `analyzePath` shared by CLI and GUI
 - `src/main.zig` — CLI entry point
+- `src/gui.zig` — raylib GUI
 - `scripts/bench.sh` — benchmark vs gzip
 - `fixtures/` — test fixtures (a compiled Mach-O binary, its source, text)

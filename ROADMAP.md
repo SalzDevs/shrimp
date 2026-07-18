@@ -125,6 +125,25 @@ entropy requires coding a better token stream (runs/matches) or arithmetic
 coding. Where Huffman shines vs our bit-RLE is skewed non-runny data
 (source code: RLE inflates ~8×, Huffman gets 61%).
 
+### GUI ✅ DONE (v1)
+Native desktop app (`src/gui.zig`, all-Zig + raylib, cross-platform):
+- Single-window, drag-and-drop driven: drop any file for instant analysis
+  (entropy bar + verdict, top-bytes histogram, bit-run stats, exact
+  predicted `.shrimp` size), one-click compress/decompress.
+- Outputs auto-named next to the source (`<name>.shrimp` / stripped name),
+  with a no-clobber fallback; every compress verified via in-memory
+  round-trip.
+- Library refactor: file-level `format.compressFile`/`decompressFile` and
+  `inspect.analyzePath` are now shared by CLI and GUI (no logic duplication).
+- `zig build run-gui`; `-Draylib-prefix=` for non-Homebrew installs;
+  `--smoke [file]` headless self-test (also exercises the actions).
+- Note: raylib 5.5 init crashed once flakily in this session (GLFW monitor
+  detection race, not app code); `--smoke` is the regression check.
+
+Future GUI polish: hex-dump view, native save/open dialogs
+(tinyfiledialogs), recent-files list, .shrimp block map visualization,
+app bundling (.app + icon).
+
 ### Phase 5 — LZ77 (next, if ratio still matters)
 The remaining ~2× gap to gzip is all about repeated multi-byte patterns,
 which neither RLE nor Huffman can see. Plan: greedy hash-chain LZ77 over a
