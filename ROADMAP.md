@@ -51,28 +51,35 @@ no way to know the encoder is even right.
 
 ## Roadmap
 
-### Phase 0 — Hygiene (quick wins, do first)
-1. Add `.gitignore` (`.zig-cache/`, `zig-out/`, `main`, `main.o`) and
-   `git rm -r --cached .zig-cache`.
-2. Add `build.zig` with `run` and `test` steps; move code to `src/main.zig`.
-3. Flesh out the README: what shrimp is, how to build/run.
+### Phase 0 — Hygiene ✅ DONE
+1. ✅ `.gitignore` added; `.zig-cache` untracked.
+2. ✅ `build.zig` + `build.zig.zon`; code under `src/` (`root.zig` library
+   module + `main.zig` CLI).
+3. ✅ README with build/run/test instructions.
 
-### Phase 1 — A correct, round-trippable core
-4. Rework RLE to operate on a **bitstream across the whole input**, not
-   per-byte. Decide the run encoding (e.g. count as fixed-width field, with
-   an escape/max-run continuation for runs > max).
-5. Write `BitWriter` / `BitReader` (MSB-first, matching `byte_to_bits`).
-6. Write the decoder. **Property test: `decode(encode(x)) == x`** for random
-   buffers, empty input, all-zeros, all-ones, alternating bits, and `hello`.
-   This test is the foundation everything else stands on.
+### Phase 1 — A correct, round-trippable core ✅ DONE
+4. ✅ Stream-wide bit RLE in `src/rle.zig`: runs cross byte boundaries;
+   u8 counts with empty-run (0-count) continuation for runs > 255 bits.
+5. ⏭️ Skipped a general `BitWriter`/`BitReader` for now: the RLE payload is
+   byte-aligned (start bit + count bytes), so one wasn't needed. Revisit for
+   Huffman (Phase 4).
+6. ✅ Decoder + property tests: `decode(encode(x)) == x` over random buffers
+   (many sizes), exhaustive single bytes, all-zeros, all-ones, alternating,
+   plus malformed-payload rejection.
 
-### Phase 2 — Real file format + CLI
-7. Define a container format: magic bytes (`SHRIMP`/`0x53...`), format
-   version, original length, checksum (CRC32 or xxhash), then block stream.
-8. Add a **raw block type** so incompressible data is stored verbatim
-   (small header overhead) instead of expanding.
-9. CLI with subcommands: `shrimp compress <in> <out>`,
-   `shrimp decompress <in> <out>`. Stream I/O, no hardcoded paths, no 1 MB cap.
+### Phase 2 — Real file format + CLI ✅ DONE
+7. ✅ `.shrimp` v1 container: `"SHRM"` magic, version, original length,
+   CRC-32/ISO-HDLC of the uncompressed data (verified on decompress).
+8. ✅ Raw-block fallback is a *format rule* (rle only when smaller), so
+   inflation is capped at 17 + 9 bytes per 64 KiB block.
+9. ✅ `shrimp compress/decompress <in> <out>`: streaming, 64 KiB blocks,
+   constant memory; compress does a checksum pre-pass (two passes total).
+
+Verified end-to-end: `hello` 33,432 → 5,319 bytes (15.9%), 512 KiB of zeros
+→ 6.3%, 512 KiB of random → 100.0% (raw fallback), empty file, corruption
+detection (BadMagic / Overflow / ChecksumMismatch), all round-trips
+byte-identical. Baseline: `gzip -1` gets `hello` to 1,227 bytes — the gap
+is what Phase 4 is for.
 
 ### Phase 3 — The inspector (differentiator)
 10. `shrimp inspect <file>`:

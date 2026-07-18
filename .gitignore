@@ -6,5 +6,8 @@ zig-out/
 main
 main.o
 
+# shrimp output files
+*.shrimp
+
 # macOS
 .DS_Store

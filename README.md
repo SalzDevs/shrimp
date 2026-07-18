@@ -2,9 +2,9 @@
 
 A binary file compressor and inspector, written in Zig.
 
-**Status: early development.** The core currently performs bit-level
-run-length encoding (RLE) of file contents. See [ROADMAP.md](ROADMAP.md)
-for the plan.
+**Status: early development.** Compression currently uses stream-wide
+bit-level run-length encoding (RLE) with a raw-block fallback, wrapped in a
+checksummed `.shrimp` container. See [ROADMAP.md](ROADMAP.md) for the plan.
 
 ## Requirements
 
@@ -16,10 +16,11 @@ for the plan.
 zig build          # installs to zig-out/bin/shrimp
 ```
 
-## Run
+## Usage
 
 ```sh
-zig build run      # reads ./hello and prints per-byte bit runs
+shrimp compress   <input> <output>   # e.g. shrimp compress hello hello.shrimp
+shrimp decompress <input> <output>   # verifies the checksum while decoding
 ```
 
 ## Test
@@ -28,8 +29,25 @@ zig build run      # reads ./hello and prints per-byte bit runs
 zig build test
 ```
 
+## The `.shrimp` format (v1)
+
+```
+header:  "SHRM" | version:u8 | original_len:u64le | crc32:u32le
+block:   type:u8 | raw_len:u32le | payload_len:u32le | payload
+```
+
+- Data is processed in 64 KiB blocks.
+- A block is stored **rle** only when that is smaller, otherwise **raw** —
+  so a `.shrimp` file never inflates its input beyond small fixed headers.
+- RLE payloads encode bit runs across the whole block: a starting-bit byte
+  followed by alternating run lengths (0 = empty run, used to continue runs
+  past 255 bits).
+- `crc32` (CRC-32/ISO-HDLC) covers the uncompressed data and is verified
+  during decompression.
+
 ## Layout
 
-- `src/root.zig` — compression core (library module, importable as `shrimp`)
+- `src/rle.zig` — bitstream RLE encoder/decoder
+- `src/format.zig` — `.shrimp` container (compress/decompress streams)
 - `src/main.zig` — CLI entry point
 - `hello.c`, `hello`, `a.txt` — test fixtures
