@@ -2,9 +2,11 @@
 
 A binary file compressor and inspector, written in Zig.
 
-**Status: early development.** Compression currently uses stream-wide
-bit-level run-length encoding (RLE) with a raw-block fallback, wrapped in a
-checksummed `.shrimp` container. See [ROADMAP.md](ROADMAP.md) for the plan.
+**Status: early development.** Compression picks the smallest of three
+block encodings — raw, bit-level run-length encoding, or Huffman coding —
+per 64 KiB block, wrapped in a checksummed `.shrimp` container.
+See [ROADMAP.md](ROADMAP.md) for the plan and `scripts/bench.sh` for a
+benchmark against gzip.
 
 ## Requirements
 
@@ -35,26 +37,33 @@ the checksum.
 zig build test
 ```
 
-## The `.shrimp` format (v1)
+## The `.shrimp` format (v2)
 
 ```
 header:  "SHRM" | version:u8 | original_len:u64le | crc32:u32le
 block:   type:u8 | raw_len:u32le | payload_len:u32le | payload
 ```
 
-- Data is processed in 64 KiB blocks.
-- A block is stored **rle** only when that is smaller, otherwise **raw** —
-  so a `.shrimp` file never inflates its input beyond small fixed headers.
-- RLE payloads encode bit runs across the whole block: a starting-bit byte
-  followed by alternating run lengths (0 = empty run, used to continue runs
-  past 255 bits).
+- Data is processed in 64 KiB blocks; each block uses whichever encoding is
+  smallest, so a `.shrimp` file never inflates its input beyond small fixed
+  headers.
+- Block types:
+  - **raw** (0) — bytes verbatim.
+  - **rle** (1) — bit runs across the whole block: a starting-bit byte
+    followed by alternating run lengths (0 = empty run, continues runs past
+    255 bits).
+  - **huffman** (2) — canonical Huffman codes: `num_syms:u16le`, then
+    `num_syms` code-length bytes, then the MSB-first packed codes. Code
+    lengths are capped at 15 bits.
 - `crc32` (CRC-32/ISO-HDLC) covers the uncompressed data and is verified
-  during decompression.
+  during decompression. v1 files (no huffman blocks) remain readable.
 
 ## Layout
 
 - `src/rle.zig` — bitstream RLE encoder/decoder
-- `src/format.zig` — `.shrimp` container (compress/decompress streams)
+- `src/huffman.zig` — canonical Huffman encoder/decoder
+- `src/format.zig` — `.shrimp` container (block selection, compress/decompress)
 - `src/inspect.zig` — file analysis: entropy, histograms, run stats, reports
 - `src/main.zig` — CLI entry point
+- `scripts/bench.sh` — benchmark vs gzip
 - `fixtures/` — test fixtures (a compiled Mach-O binary, its source, text)

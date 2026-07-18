@@ -89,9 +89,10 @@ fn compressFile(io: std.Io, gpa: std.mem.Allocator, input_path: []const u8, outp
     } else {
         const percent = @as(f64, @floatFromInt(stats.output_bytes)) /
             @as(f64, @floatFromInt(stats.input_bytes)) * 100.0;
-        std.debug.print("{s}: {d} -> {d} bytes ({d:.1}%), {d} rle + {d} raw blocks\n", .{
-            output_path,           stats.input_bytes, stats.output_bytes,
-            percent,               stats.rle_blocks,  stats.raw_blocks,
+        std.debug.print("{s}: {d} -> {d} bytes ({d:.1}%), {d} rle + {d} huffman + {d} raw blocks\n", .{
+            output_path,           stats.input_bytes,     stats.output_bytes,
+            percent,               stats.rle_blocks,      stats.huffman_blocks,
+            stats.raw_blocks,
         });
     }
 }

@@ -99,11 +99,39 @@ is what Phase 4 is for.
 Future inspector ideas: per-block table for `.shrimp` files, `--dump-all`
 hex view, histogram of run lengths, JSON output mode.
 
-### Phase 4 — Beyond RLE (optional, if ratio matters)
-RLE alone only wins on very repetitive data. A natural progression:
-byte-level RLE (PackBits-style) → Huffman coding → LZ77 + Huffman
-(DEFLATE-lite). Benchmark against `gzip -1` on a fixed corpus to keep honest
-numbers.
+### Phase 4 — Huffman coding ✅ DONE
+- ✅ Canonical Huffman as a third block type (`src/huffman.zig`): per-block
+  code-length table, MSB-first packed codes, 15-bit length cap with
+  fallback, full malformed-table validation. BitWriter/BitReader landed here
+  (the Phase 1 item that was deferred).
+- ✅ Best-of-block selection in `format.compressStream` (raw / rle /
+  huffman per 64 KiB block, smallest wins) — the no-inflation rule now spans
+  all three types. Format bumped to **v2**; v1 files remain readable.
+- ✅ Inspector mirrors the three-way decision (prediction stays exact,
+  property-tested) and reports predicted block types.
+- ✅ `scripts/bench.sh` vs gzip. Current numbers:
+
+  | file | orig | shrimp | gzip -1 | gzip -9 |
+  |---|---|---|---|---|
+  | hello (Mach-O) | 33,432 | 5,229 (15.6%) | 1,227 (3.7%) | 1,024 (3.1%) |
+  | zig-source | 48,564 | 29,663 (61.1%) | 14,858 (30.6%) | 12,073 (24.9%) |
+  | zeros-1M | 1,048,576 | 65,985 (6.3%) | 4,617 (0.4%) | 1,060 (0.1%) |
+  | random-1M | 1,048,576 | 1,048,737 (100.0%) | 1,048,924 | 1,048,924 |
+  | /bin/ls | 154,624 | 62,258 (40.3%) | 35,294 (22.8%) | 33,667 (21.8%) |
+
+**Key finding:** Huffman floors at 1 bit per symbol occurrence — 32,535
+zero bytes cost ≥ 32,535 bits no matter the skew. Approaching sub-1-bit
+entropy requires coding a better token stream (runs/matches) or arithmetic
+coding. Where Huffman shines vs our bit-RLE is skewed non-runny data
+(source code: RLE inflates ~8×, Huffman gets 61%).
+
+### Phase 5 — LZ77 (next, if ratio still matters)
+The remaining ~2× gap to gzip is all about repeated multi-byte patterns,
+which neither RLE nor Huffman can see. Plan: greedy hash-chain LZ77 over a
+32–64 KiB window, tokens (literals / length-distance pairs) written through
+the existing Huffman machinery as a fourth block type (DEFLATE-lite).
+Considered and skipped: Huffman-coding the RLE count stream — marginal
+gains for a dead-end stepping stone.
 
 ## Suggested immediate next step
 Phase 0, then Phase 1 items 4–6 as one unit of work: *"stream-wide bit RLE

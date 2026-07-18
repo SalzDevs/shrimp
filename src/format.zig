@@ -1,20 +1,24 @@
 const std = @import("std");
 const rle = @import("rle.zig");
+const huffman = @import("huffman.zig");
 
-/// `.shrimp` container format, version 1.
+/// `.shrimp` container format, version 2.
 ///
 ///   header:  "SHRM" | version:u8 | original_len:u64le | crc32:u32le
 ///   block:   type:u8 | raw_len:u32le | payload_len:u32le | payload bytes
 ///
 /// `crc32` is CRC-32/ISO-HDLC of the *uncompressed* data.
 ///
-/// Raw blocks store `raw_len` bytes verbatim (`payload_len == raw_len`).
-/// Rle blocks store an `rle.encodeAlloc` payload. Encoders MUST fall back to
-/// a raw block when rle would not shrink the block, so `payload_len <
-/// raw_len` always holds and the format can never inflate data by more than
-/// the per-block header.
+/// Each block is stored in whichever form is smallest:
+///   raw     (0): `raw_len` bytes verbatim (`payload_len == raw_len`)
+///   rle     (1): an `rle.encodeAlloc` payload
+///   huffman (2): a `huffman.encodeAlloc` payload
+/// Encoders MUST fall back to a smaller form, so `payload_len < raw_len`
+/// holds for compressed blocks and the format can never inflate data by
+/// more than the per-block header. Version 1 files (without huffman blocks)
+/// remain readable.
 pub const magic = "SHRM";
-pub const version: u8 = 1;
+pub const version: u8 = 2;
 pub const chunk_size: usize = 64 * 1024;
 
 pub const header_size = magic.len + 1 + 8 + 4;
@@ -22,12 +26,14 @@ pub const block_header_size = 1 + 4 + 4;
 
 pub const block_raw: u8 = 0;
 pub const block_rle: u8 = 1;
+pub const block_huffman: u8 = 2;
 
 pub const Stats = struct {
     input_bytes: u64 = 0,
     output_bytes: u64 = 0,
     raw_blocks: u32 = 0,
     rle_blocks: u32 = 0,
+    huffman_blocks: u32 = 0,
 };
 
 pub const FormatError = error{
@@ -64,24 +70,49 @@ pub fn compressStream(
         if (n == 0) break;
         total += n;
 
-        const payload = try rle.encodeAlloc(gpa, chunk[0..n]);
-        defer gpa.free(payload); // end of loop iteration
+        const raw = chunk[0..n];
 
-        if (payload.len < n) {
-            try w.writeByte(block_rle);
-            try w.writeInt(u32, @intCast(n), .little);
-            try w.writeInt(u32, @intCast(payload.len), .little);
-            try w.writeAll(payload);
-            stats.rle_blocks += 1;
-            stats.output_bytes += block_header_size + payload.len;
-        } else {
-            try w.writeByte(block_raw);
-            try w.writeInt(u32, @intCast(n), .little);
-            try w.writeInt(u32, @intCast(n), .little);
-            try w.writeAll(chunk[0..n]);
-            stats.raw_blocks += 1;
-            stats.output_bytes += block_header_size + n;
+        // Pick the smallest block form; encode only the winner.
+        const rle_payload = try rle.encodeAlloc(gpa, raw);
+        defer gpa.free(rle_payload); // end of loop iteration
+
+        var block_type = block_raw;
+        var best_size: u64 = n;
+        if (rle_payload.len < best_size) {
+            block_type = block_rle;
+            best_size = rle_payload.len;
         }
+
+        var huff_payload: ?[]u8 = null;
+        defer if (huff_payload) |p| gpa.free(p); // end of loop iteration
+        if (huffman.plan(raw)) |hp| {
+            if (hp.payloadBytes() < best_size) {
+                huff_payload = try huffman.encodeAlloc(gpa, raw, &hp);
+                std.debug.assert(huff_payload.?.len == hp.payloadBytes());
+                block_type = block_huffman;
+                best_size = huff_payload.?.len;
+            }
+        }
+
+        try w.writeByte(block_type);
+        try w.writeInt(u32, @intCast(n), .little);
+        try w.writeInt(u32, @intCast(best_size), .little);
+        switch (block_type) {
+            block_raw => {
+                try w.writeAll(raw);
+                stats.raw_blocks += 1;
+            },
+            block_rle => {
+                try w.writeAll(rle_payload);
+                stats.rle_blocks += 1;
+            },
+            block_huffman => {
+                try w.writeAll(huff_payload.?);
+                stats.huffman_blocks += 1;
+            },
+            else => unreachable,
+        }
+        stats.output_bytes += block_header_size + best_size;
     }
 
     if (total != original_len) return FormatError.SizeMismatch;
@@ -95,7 +126,7 @@ pub fn decompressStream(r: *std.Io.Reader, w: *std.Io.Writer) !Stats {
     if (!std.mem.eql(u8, magic_bytes, magic)) return FormatError.BadMagic;
 
     const ver = try r.takeByte();
-    if (ver != version) return FormatError.UnsupportedVersion;
+    if (ver == 0 or ver > version) return FormatError.UnsupportedVersion;
 
     const original_len = try readIntLe(r, u64);
     const expected_crc = try readIntLe(r, u32);
@@ -128,6 +159,12 @@ pub fn decompressStream(r: *std.Io.Reader, w: *std.Io.Writer) !Stats {
                 try r.readSliceAll(payload_buf[0..payload_len]);
                 try rle.decode(payload_buf[0..payload_len], out);
                 stats.rle_blocks += 1;
+            },
+            block_huffman => {
+                if (payload_len == 0 or payload_len >= raw_len) return FormatError.InvalidBlock;
+                try r.readSliceAll(payload_buf[0..payload_len]);
+                try huffman.decode(payload_buf[0..payload_len], out);
+                stats.huffman_blocks += 1;
             },
             else => return FormatError.InvalidBlock,
         }
@@ -227,6 +264,20 @@ test "round trip: incompressible data falls back to raw blocks" {
     try std.testing.expect(stats.raw_blocks >= 2);
     // Overhead is only the container + block headers, never inflation.
     try std.testing.expect(stats.input_bytes <= stats.output_bytes + header_size + 3 * block_header_size);
+}
+
+test "round trip: skewed text picks huffman blocks" {
+    const gpa = std.testing.allocator;
+
+    var input: std.ArrayList(u8) = .empty;
+    defer input.deinit(gpa);
+    for (0..2000) |_| try input.appendSlice(gpa, "the quick brown fox jumps over the lazy dog. ");
+
+    const stats = try expectFileRoundTrip(gpa, input.items);
+
+    try std.testing.expect(stats.huffman_blocks >= 1);
+    try std.testing.expectEqual(0, stats.raw_blocks);
+    try std.testing.expect(stats.input_bytes < stats.output_bytes);
 }
 
 test "round trip: patterned binary data" {

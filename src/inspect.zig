@@ -1,5 +1,6 @@
 const std = @import("std");
 const format = @import("format.zig");
+const huffman = @import("huffman.zig");
 
 /// Exact number of count bytes a bit run of `len` occupies in an rle payload
 /// (see `rle.encodeAlloc`): one byte per 255-bit segment, plus a 0-count
@@ -35,13 +36,21 @@ pub const ByteStats = struct {
     longest_run: u64 = 0,
     run_bits_sum: u64 = 0,
     predicted_bytes: u64 = format.header_size,
+    predicted_raw_blocks: u32 = 0,
+    predicted_rle_blocks: u32 = 0,
+    predicted_huffman_blocks: u32 = 0,
 
     pub fn update(self: *ByteStats, chunk: []const u8) void {
         if (chunk.len == 0) return;
         self.total_bytes += chunk.len;
-        for (chunk) |b| self.histogram[b] += 1;
 
-        var payload: u64 = 1; // the start-bit byte
+        var chunk_freqs: [256]u64 = [_]u64{0} ** 256;
+        for (chunk) |b| {
+            self.histogram[b] += 1;
+            chunk_freqs[b] += 1;
+        }
+
+        var rle_payload: u64 = 1; // the start-bit byte
         var cur: u1 = @intCast(chunk[0] >> 7);
         var len: u64 = 1;
         var first = true;
@@ -55,16 +64,33 @@ pub const ByteStats = struct {
                 if (bit == cur) {
                     len += 1;
                 } else {
-                    payload += self.recordRun(len);
+                    rle_payload += self.recordRun(len);
                     cur = bit;
                     len = 1;
                 }
             }
         }
-        payload += self.recordRun(len);
+        rle_payload += self.recordRun(len);
 
-        // Mirrors the raw/rle block decision in format.compressStream.
-        self.predicted_bytes += format.block_header_size + @min(payload, chunk.len);
+        // Mirrors the smallest-block decision in format.compressStream.
+        var best: u64 = chunk.len;
+        var kind: enum { raw, rle, huffman } = .raw;
+        if (rle_payload < best) {
+            best = rle_payload;
+            kind = .rle;
+        }
+        if (huffman.planFreqs(&chunk_freqs)) |hp| {
+            if (hp.payloadBytes() < best) {
+                best = hp.payloadBytes();
+                kind = .huffman;
+            }
+        }
+        switch (kind) {
+            .raw => self.predicted_raw_blocks += 1,
+            .rle => self.predicted_rle_blocks += 1,
+            .huffman => self.predicted_huffman_blocks += 1,
+        }
+        self.predicted_bytes += format.block_header_size + best;
     }
 
     fn recordRun(self: *ByteStats, len: u64) u64 {
@@ -165,8 +191,9 @@ pub fn renderReport(
     });
     const pct = @as(f64, @floatFromInt(stats.predicted_bytes)) /
         @as(f64, @floatFromInt(stats.total_bytes)) * 100.0;
-    try w.print("predicted .shrimp size: {d} bytes ({d:.1}%)\n", .{
-        stats.predicted_bytes, pct,
+    try w.print("predicted .shrimp size: {d} bytes ({d:.1}%), {d} rle + {d} huffman + {d} raw blocks\n", .{
+        stats.predicted_bytes, pct, stats.predicted_rle_blocks,
+        stats.predicted_huffman_blocks, stats.predicted_raw_blocks,
     });
 }
 
@@ -182,7 +209,9 @@ pub fn renderShrimpReport(w: *std.Io.Writer, path: []const u8, stats: format.Sta
 
     try w.print("original:   {d} bytes\n", .{stats.output_bytes});
     try w.print("compressed: {d} bytes ({d:.1}% of original)\n", .{ stats.input_bytes, pct });
-    try w.print("blocks:     {d} rle + {d} raw\n", .{ stats.rle_blocks, stats.raw_blocks });
+    try w.print("blocks:     {d} rle + {d} huffman + {d} raw\n", .{
+        stats.rle_blocks, stats.huffman_blocks, stats.raw_blocks,
+    });
     try w.writeAll("integrity:  checksum ok\n");
 }
 
