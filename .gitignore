@@ -1,0 +1,10 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+
+# Ad-hoc binaries from `zig build-exe`
+main
+main.o
+
+# macOS
+.DS_Store
