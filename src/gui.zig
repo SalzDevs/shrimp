@@ -28,15 +28,17 @@ fn col(r: u8, g: u8, b: u8) rl.Color {
     return .{ .r = r, .g = g, .b = b, .a = 255 };
 }
 
-const bg = col(22, 23, 31);
-const panel = col(33, 35, 47);
-const border = col(60, 63, 80);
-const text_col = col(232, 233, 240);
-const dim = col(148, 151, 166);
-const accent = col(99, 179, 237);
-const green = col(90, 200, 130);
-const amber = col(230, 185, 90);
-const red = col(225, 95, 95);
+// Shrimp brand: warm-neutral darks, coral reserved for actions and key
+// numbers. green/amber/red stay semantic (entropy verdict, success, error).
+const bg = col(25, 23, 22);
+const panel = col(37, 34, 32);
+const border = col(64, 57, 53);
+const text_col = col(240, 236, 232);
+const dim = col(160, 150, 142);
+const accent = col(255, 107, 94); // coral #FF6B5E
+const green = col(95, 198, 125);
+const amber = col(232, 188, 95);
+const red = col(238, 96, 90);
 
 fn lighten(c: rl.Color) rl.Color {
     return .{
@@ -127,6 +129,7 @@ const App = struct {
     io: std.Io,
     gpa: std.mem.Allocator,
     view: View = .empty,
+    details_open: bool = false,
     path_buf: [4096]u8 = undefined,
     path_len: usize = 0,
     out_buf: [4096]u8 = undefined,
@@ -225,67 +228,44 @@ const App = struct {
             .shrimp => |*v| self.drawShrimp(v),
             .failure => |msg| drawFailure(msg),
         }
-        drawText(fonts.ui, W - pad - 90, H - 26, 12, dim, "esc to quit", .{});
+        drawText(fonts.ui, winW() - pad - 90, winH() - 26, 12, dim, "esc to quit", .{});
     }
 
     fn drawHeader(self: *App) void {
         drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
         if (self.view != .empty) {
-            drawText(fonts.ui, W - pad - 220, 34, 13, dim, "drop another file to replace", .{});
+            drawText(fonts.ui, winW() - pad - 220, 34, 13, dim, "drop another file to replace", .{});
         }
     }
 
     fn drawPlain(self: *App, v: *PlainView) void {
         self.drawHeader();
+        const ww = winW();
+        const wh = winH();
         var y: i32 = 76;
         var cb: [40]u8 = undefined;
 
-        drawText(fonts.mono, pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
-        y += 28;
+        drawText(fonts.mono, pad, y, 22, text_col, "{s}", .{std.fs.path.basename(self.path())});
+        y += 30;
         drawText(fonts.mono, pad, y, 14, dim, "{s} bytes", .{commas(&cb, v.stats.total_bytes)});
-        y += 34;
+        y += 40;
 
         if (v.stats.total_bytes == 0) {
             drawText(fonts.ui, pad, y, 16, dim, "empty file", .{});
-            y += 30;
+            y += 32;
         } else {
             const h = v.stats.entropy();
             drawText(fonts.ui, pad, y, 15, dim, "entropy", .{});
-            bar(pad + 130, y + 2, 330, 14, @floatCast(h / 8.0), verdictColor(h));
-            drawText(fonts.mono, pad + 476, y - 1, 15, text_col, "{d:.2} bits/byte - {s}", .{ h, shrimp.inspect.entropyVerdict(h) });
-            y += 42;
+            bar(pad + 130, y + 1, @min(360, ww - 2 * pad - 130 - 340), 16, @floatCast(h / 8.0), verdictColor(h));
+            drawText(fonts.mono, ww - pad - 324, y - 1, 15, text_col, "{d:.2} bits/byte - {s}", .{ h, shrimp.inspect.entropyVerdict(h) });
+            y += 46;
 
-            drawText(fonts.ui, pad, y, 15, dim, "most common bytes", .{});
-            y += 26;
-            var top: [8]shrimp.inspect.ByteCount = undefined;
-            const tops = shrimp.inspect.topBytes(&v.stats.histogram, &top);
-            const maxc: f64 = @floatFromInt(tops[0].count);
-            for (tops) |e| {
-                const p = @as(f64, @floatFromInt(e.count)) / @as(f64, @floatFromInt(v.stats.total_bytes)) * 100.0;
-                drawText(fonts.mono, pad, y, 14, text_col, "0x{x:0>2} '{c}'", .{ e.byte, if (std.ascii.isPrint(e.byte)) e.byte else '.' });
-                bar(pad + 110, y + 2, 330, 12, @floatCast(@as(f64, @floatFromInt(e.count)) / maxc), accent);
-                drawText(fonts.mono, pad + 456, y, 14, dim, "{d:.1}%", .{p});
-                y += 24;
-            }
-            y += 18;
-
-            var cb2: [40]u8 = undefined;
             var cb3: [40]u8 = undefined;
-            drawText(fonts.mono, pad, y, 14, dim, "bit runs: {s} - avg {d:.1} bits - longest {s} bits", .{
-                commas(&cb, v.stats.total_runs),
-                v.stats.avgRunBits(),
-                commas(&cb2, v.stats.longest_run),
-            });
-            y += 28;
-            drawText(fonts.mono, pad, y, 15, text_col, "shrinks to {s} bytes ({d:.1}%)", .{
+            drawText(fonts.mono, pad, y, 18, accent, "shrinks to {s} bytes ({d:.1}%)", .{
                 commas(&cb3, v.stats.predicted_bytes),
                 pct(v.stats.predicted_bytes, v.stats.total_bytes),
             });
-            y += 22;
-            drawText(fonts.mono, pad, y, 13, dim, "{d} rle - {d} huffman - {d} raw blocks", .{
-                v.stats.predicted_rle_blocks, v.stats.predicted_huffman_blocks, v.stats.predicted_raw_blocks,
-            });
-            y += 34;
+            y += 40;
         }
 
         var lb: [300]u8 = undefined;
@@ -295,7 +275,52 @@ const App = struct {
         }
         y += 58;
 
-        if (v.result) |*r| drawResult(y, r);
+        if (v.result) |*r| {
+            drawResult(y, r);
+            y += 64;
+        }
+
+        // Progressive disclosure: analysis details on demand.
+        if (v.stats.total_bytes > 0 and y < wh - 70) {
+            if (link(pad, y, if (self.details_open) "[-] details" else "[+] details")) {
+                self.details_open = !self.details_open;
+            }
+            y += 30;
+            if (self.details_open) self.drawPlainDetails(v, y, ww, wh);
+        }
+    }
+
+    fn drawPlainDetails(self: *App, v: *PlainView, y_start: i32, ww: i32, wh: i32) void {
+        _ = self;
+        var y = y_start;
+        var cb: [40]u8 = undefined;
+        var cb2: [40]u8 = undefined;
+
+        drawText(fonts.ui, pad, y, 15, dim, "most common bytes", .{});
+        y += 28;
+        var top: [8]shrimp.inspect.ByteCount = undefined;
+        const tops = shrimp.inspect.topBytes(&v.stats.histogram, &top);
+        const maxc: f64 = @floatFromInt(tops[0].count);
+        for (tops) |e| {
+            if (y > wh - 70) break; // clip: window too short for more rows
+            const p = @as(f64, @floatFromInt(e.count)) / @as(f64, @floatFromInt(v.stats.total_bytes)) * 100.0;
+            drawText(fonts.mono, pad, y, 14, text_col, "0x{x:0>2} '{c}'", .{ e.byte, if (std.ascii.isPrint(e.byte)) e.byte else '.' });
+            bar(pad + 110, y + 2, @min(520, ww - 2 * pad - 110 - 100), 14, @floatCast(@as(f64, @floatFromInt(e.count)) / maxc), accent);
+            drawText(fonts.mono, ww - pad - 84, y, 14, dim, "{d:.1}%", .{p});
+            y += 25;
+        }
+        y += 20;
+        if (y < wh - 70) {
+            drawText(fonts.mono, pad, y, 14, dim, "bit runs: {s} - avg {d:.1} bits - longest {s} bits", .{
+                commas(&cb, v.stats.total_runs),
+                v.stats.avgRunBits(),
+                commas(&cb2, v.stats.longest_run),
+            });
+            y += 26;
+            drawText(fonts.mono, pad, y, 13, dim, "{d} rle - {d} huffman - {d} raw blocks", .{
+                v.stats.predicted_rle_blocks, v.stats.predicted_huffman_blocks, v.stats.predicted_raw_blocks,
+            });
+        }
     }
 
     fn drawShrimp(self: *App, v: *ShrimpView) void {
@@ -304,10 +329,10 @@ const App = struct {
         var cb: [40]u8 = undefined;
         var cb2: [40]u8 = undefined;
 
-        drawText(fonts.mono, pad, y, 20, text_col, "{s}", .{std.fs.path.basename(self.path())});
-        y += 28;
+        drawText(fonts.mono, pad, y, 22, text_col, "{s}", .{std.fs.path.basename(self.path())});
+        y += 30;
         drawText(fonts.ui, pad, y, 14, dim, ".shrimp container (v{d})", .{shrimp.format.version});
-        y += 40;
+        y += 42;
 
         drawText(fonts.ui, pad, y, 15, dim, "original", .{});
         drawText(fonts.mono, pad + 130, y, 15, text_col, "{s} bytes", .{commas(&cb, v.stats.output_bytes)});
@@ -338,6 +363,32 @@ const App = struct {
         if (v.result) |*r| drawResult(y, r);
     }
 };
+
+fn winW() i32 {
+    return rl.GetScreenWidth();
+}
+
+fn winH() i32 {
+    return rl.GetScreenHeight();
+}
+
+fn drawCentered(font: rl.Font, y: i32, size: i32, color: rl.Color, comptime fmt: []const u8, args: anytype) void {
+    var b: [512]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, fmt, args) catch return;
+    const m = rl.MeasureTextEx(font, s.ptr, @floatFromInt(size), 0);
+    rl.DrawTextEx(font, s.ptr, .{ .x = (@as(f32, @floatFromInt(winW())) - m.x) / 2, .y = @floatFromInt(y) }, @floatFromInt(size), 0, color);
+}
+
+/// A clickable text link (used for the details toggle).
+fn link(x: i32, y: i32, label: []const u8) bool {
+    var b: [64]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, "{s}", .{label}) catch return false;
+    const m = rl.MeasureTextEx(fonts.ui, s.ptr, 15, 0);
+    const rect: rl.Rectangle = .{ .x = @floatFromInt(x), .y = @floatFromInt(y), .width = m.x, .height = 20 };
+    const hover = rl.CheckCollisionPointRec(rl.GetMousePosition(), rect);
+    drawText(fonts.ui, x, y, 15, if (hover) accent else dim, "{s}", .{label});
+    return hover and rl.IsMouseButtonPressed(rl.MOUSE_BUTTON_LEFT);
+}
 
 fn pct(part: u64, whole: u64) f64 {
     if (whole == 0) return 0;
@@ -373,21 +424,28 @@ fn verifyRoundTrip(io: std.Io, gpa: std.mem.Allocator, src_path: []const u8, shr
 }
 
 fn drawEmpty() void {
+    const ww = winW();
+    const wh = winH();
     drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
     drawText(fonts.ui, pad, 58, 13, dim, "binary file compressor and inspector", .{});
 
-    const rect: rl.Rectangle = .{ .x = pad, .y = 150, .width = W - 2 * pad, .height = 300 };
+    const rect: rl.Rectangle = .{
+        .x = pad,
+        .y = @floatFromInt(@divTrunc(wh, 2) - 170),
+        .width = @floatFromInt(ww - 2 * pad),
+        .height = 340,
+    };
     rl.DrawRectangleRounded(rect, 0.06, 12, panel);
     rl.DrawRectangleRoundedLines(rect, 0.06, 12, border);
 
-    drawText(fonts.ui, W / 2 - 130, 270, 24, text_col, "Drop a file here", .{});
-    drawText(fonts.ui, W / 2 - 150, 310, 14, dim, "any file is analyzed the moment it lands", .{});
-    drawText(fonts.ui, W / 2 - 160, 380, 13, dim, "entropy - histogram - predicted compressed size", .{});
+    drawCentered(fonts.ui, @divTrunc(wh, 2) - 50, 24, text_col, "Drop a file here", .{});
+    drawCentered(fonts.ui, @divTrunc(wh, 2) - 10, 14, dim, "any file is analyzed the moment it lands", .{});
+    drawCentered(fonts.ui, @divTrunc(wh, 2) + 70, 13, dim, "entropy - histogram - predicted compressed size", .{});
 }
 
 fn drawFailure(msg: []const u8) void {
     drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
-    const rect: rl.Rectangle = .{ .x = pad, .y = 200, .width = W - 2 * pad, .height = 120 };
+    const rect: rl.Rectangle = .{ .x = pad, .y = 200, .width = @floatFromInt(winW() - 2 * pad), .height = 120 };
     rl.DrawRectangleRounded(rect, 0.08, 12, panel);
     rl.DrawRectangle(pad, 200, 4, 120, red);
     drawText(fonts.ui, pad + 20, 232, 17, red, "could not read that file", .{});
@@ -397,7 +455,7 @@ fn drawFailure(msg: []const u8) void {
 
 fn drawResult(y: i32, r: *const Result) void {
     const c = if (r.ok) green else red;
-    rl.DrawRectangle(pad, y, W - 2 * pad, 48, panel);
+    rl.DrawRectangle(pad, y, winW() - 2 * pad, 48, panel);
     rl.DrawRectangle(pad, y, 4, 48, c);
     drawText(fonts.mono, pad + 16, y + 15, 15, text_col, "{s}", .{r.text[0..r.len]});
 }
@@ -416,8 +474,10 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    rl.SetConfigFlags(rl.FLAG_WINDOW_RESIZABLE);
     rl.InitWindow(W, H, "shrimp");
     defer rl.CloseWindow();
+    rl.SetWindowMinSize(800, 560);
     rl.SetTargetFPS(60);
 
     fonts = .{ .ui = loadFont(inter_ttf), .mono = loadFont(mono_ttf) };
