@@ -238,6 +238,20 @@ test "round trip: patterned binary data" {
     _ = try expectFileRoundTrip(gpa, input);
 }
 
+test "round trip: repo fixtures" {
+    // Fixture paths are relative to the repo root, i.e. the working
+    // directory of `zig build test`.
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+
+    for ([_][]const u8{ "fixtures/hello", "fixtures/hello.c", "fixtures/a.txt" }) |path| {
+        const bytes = try cwd.readFileAlloc(io, path, gpa, .unlimited);
+        defer gpa.free(bytes);
+        _ = try expectFileRoundTrip(gpa, bytes);
+    }
+}
+
 test "decompress rejects a non-shrimp file" {
     try std.testing.expectError(
         error.BadMagic,

@@ -19,9 +19,15 @@ zig build          # installs to zig-out/bin/shrimp
 ## Usage
 
 ```sh
-shrimp compress   <input> <output>   # e.g. shrimp compress hello hello.shrimp
+shrimp compress   <input> <output>   # e.g. shrimp compress fixtures/hello hello.shrimp
 shrimp decompress <input> <output>   # verifies the checksum while decoding
+shrimp inspect    <input>            # works on plain files and .shrimp containers
 ```
+
+`inspect` on a plain file shows a hex dump, byte histogram, Shannon
+entropy, bit-run statistics, and the *exact* size `shrimp compress` would
+produce. On a `.shrimp` file it shows the container breakdown and verifies
+the checksum.
 
 ## Test
 
@@ -49,5 +55,6 @@ block:   type:u8 | raw_len:u32le | payload_len:u32le | payload
 
 - `src/rle.zig` — bitstream RLE encoder/decoder
 - `src/format.zig` — `.shrimp` container (compress/decompress streams)
+- `src/inspect.zig` — file analysis: entropy, histograms, run stats, reports
 - `src/main.zig` — CLI entry point
-- `hello.c`, `hello`, `a.txt` — test fixtures
+- `fixtures/` — test fixtures (a compiled Mach-O binary, its source, text)

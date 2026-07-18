@@ -81,13 +81,23 @@ detection (BadMagic / Overflow / ChecksumMismatch), all round-trips
 byte-identical. Baseline: `gzip -1` gets `hello` to 1,227 bytes — the gap
 is what Phase 4 is for.
 
-### Phase 3 — The inspector (differentiator)
-10. `shrimp inspect <file>`:
-    - hex/ASCII dump view,
-    - byte-value histogram + Shannon entropy (predicts compressibility),
-    - run-length statistics (longest run, avg run, % of runs ≥ N),
-    - for `.shrimp` files: header info, block breakdown, ratio, checksum verify.
-11. Round-trip verification in CI: `compress | decompress | diff` on a corpus.
+### Phase 3 — The inspector ✅ DONE
+10. ✅ `shrimp inspect <file>` (magic-detects `.shrimp` vs plain):
+    - hex/ASCII dump of the first 256 bytes,
+    - top-8 byte histogram with bars + Shannon entropy (with a plain-English
+      verdict),
+    - bit-run statistics (count, average, longest),
+    - **exact** predicted `.shrimp` size — the stats accumulator mirrors the
+      encoder's per-block raw/rle decisions (property-tested against the real
+      compressor, including multi-block and fixture files),
+    - `.shrimp` files: original/compressed sizes, ratio, rle/raw block
+      counts, checksum verified via a full decode pass.
+11. ✅ Corpus round-trip wired into `zig build test`: repo fixtures
+    (`fixtures/hello`, `hello.c`, `a.txt`) round-trip on every test run.
+    (No CI service yet — the suite is CI-ready.)
+
+Future inspector ideas: per-block table for `.shrimp` files, `--dump-all`
+hex view, histogram of run lengths, JSON output mode.
 
 ### Phase 4 — Beyond RLE (optional, if ratio matters)
 RLE alone only wins on very repetitive data. A natural progression:
