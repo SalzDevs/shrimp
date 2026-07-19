@@ -8,6 +8,8 @@ const rl = @cImport({
 const W = 860;
 const H = 640;
 const pad = 28;
+/// Shared x-offset where bars/values start after a text label.
+const label_col = 130;
 
 const inter_ttf = @embedFile("fonts/Inter.ttf");
 const mono_ttf = @embedFile("fonts/JetBrainsMono.ttf");
@@ -89,8 +91,26 @@ fn commas(buf: []u8, value: u64) []const u8 {
 
 fn bar(x: i32, y: i32, w: i32, h: i32, frac: f32, fill: rl.Color) void {
     rl.DrawRectangle(x, y, w, h, panel);
-    const fw: i32 = @intFromFloat(@as(f32, @floatFromInt(w)) * @max(0, @min(1, frac)));
-    if (fw > 0) rl.DrawRectangle(x, y, fw, h, fill);
+    barFill(x, y, w, h, frac, fill);
+}
+
+/// Fill-only bar (no track) with a minimum visible sliver.
+fn barFill(x: i32, y: i32, w: i32, h: i32, frac: f32, fill: rl.Color) void {
+    const fw: i32 = @max(3, @as(i32, @intFromFloat(@as(f32, @floatFromInt(w)) * @max(0, @min(1, frac)))));
+    rl.DrawRectangle(x, y, fw, h, fill);
+}
+
+fn drawTextRight(font: rl.Font, x_right: i32, y: i32, size: i32, color: rl.Color, comptime fmt: []const u8, args: anytype) void {
+    var b: [512]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, fmt, args) catch return;
+    const m = rl.MeasureTextEx(font, s.ptr, @floatFromInt(size), 0);
+    rl.DrawTextEx(font, s.ptr, .{ .x = @as(f32, @floatFromInt(x_right)) - m.x, .y = @floatFromInt(y) }, @floatFromInt(size), 0, color);
+}
+
+fn measureUi(label: []const u8, size: f32) f32 {
+    var b: [256]u8 = undefined;
+    const s = std.fmt.bufPrintZ(&b, "{s}", .{label}) catch return 0;
+    return rl.MeasureTextEx(fonts.ui, s.ptr, size, 0).x;
 }
 
 fn button(rect: rl.Rectangle, label: []const u8, color: rl.Color) bool {
@@ -273,8 +293,18 @@ const App = struct {
         } else {
             const h = v.stats.entropy();
             drawText(fonts.ui, pad, y, 15, dim, "entropy", .{});
-            bar(pad + 130, y + 1, @min(360, ww - 2 * pad - 130 - 340), 16, @floatCast(h / 8.0), verdictColor(h));
-            drawText(fonts.mono, ww - pad - 324, y - 1, 15, text_col, "{d:.2} bits/byte - {s}", .{ h, shrimp.inspect.entropyVerdict(h) });
+            const bx = pad + label_col;
+            const bw = @min(360, ww - 2 * pad - label_col - 380);
+            bar(bx, y + 1, bw, 16, @floatCast(h / 8.0), verdictColor(h));
+            // threshold ticks at 4.0 and 6.0 bits/byte
+            rl.DrawRectangle(bx + @divTrunc(bw, 2), y + 1, 1, 16, bg);
+            rl.DrawRectangle(bx + @divTrunc(bw * 3, 4), y + 1, 1, 16, bg);
+            var vb: [64]u8 = undefined;
+            const vs = std.fmt.bufPrintZ(&vb, "{d:.2} bits/byte", .{h}) catch unreachable;
+            const vm = rl.MeasureTextEx(fonts.mono, vs.ptr, 15, 0);
+            const vx = bx + bw + 16;
+            drawText(fonts.mono, vx, y - 1, 15, text_col, "{s}", .{vs});
+            drawText(fonts.ui, vx + @as(i32, @intFromFloat(vm.x)) + 10, y - 1, 15, verdictColor(h), "{s}", .{shrimp.inspect.entropyVerdict(h)});
             y += 46;
 
             var cb3: [40]u8 = undefined;
@@ -286,8 +316,9 @@ const App = struct {
         }
 
         var lb: [300]u8 = undefined;
-        const label = std.fmt.bufPrint(&lb, "Compress -> {s}.shrimp", .{std.fs.path.basename(self.path())}) catch "Compress";
-        if (button(.{ .x = pad, .y = @floatFromInt(y), .width = 300, .height = 42 }, label, accent)) {
+        const label = std.fmt.bufPrint(&lb, "Compress to {s}.shrimp", .{std.fs.path.basename(self.path())}) catch "Compress";
+        const btn_w = @max(220, @as(i32, @intFromFloat(measureUi(label, 16))) + 48);
+        if (button(.{ .x = pad, .y = @floatFromInt(y), .width = @floatFromInt(btn_w), .height = 42 }, label, accent)) {
             self.compress();
         }
         y += 58;
@@ -318,12 +349,14 @@ const App = struct {
         var top: [8]shrimp.inspect.ByteCount = undefined;
         const tops = shrimp.inspect.topBytes(&v.stats.histogram, &top);
         const maxc: f64 = @floatFromInt(tops[0].count);
+        const bx = pad + label_col;
+        const bmax = @min(520, ww - 2 * pad - label_col - 90);
         for (tops) |e| {
             if (y > wh - 70) break; // clip: window too short for more rows
             const p = @as(f64, @floatFromInt(e.count)) / @as(f64, @floatFromInt(v.stats.total_bytes)) * 100.0;
             drawText(fonts.mono, pad, y, 14, text_col, "0x{x:0>2} '{c}'", .{ e.byte, if (std.ascii.isPrint(e.byte)) e.byte else '.' });
-            bar(pad + 110, y + 2, @min(520, ww - 2 * pad - 110 - 100), 14, @floatCast(@as(f64, @floatFromInt(e.count)) / maxc), accent);
-            drawText(fonts.mono, ww - pad - 84, y, 14, dim, "{d:.1}%", .{p});
+            barFill(bx, y + 2, bmax, 14, @floatCast(@as(f64, @floatFromInt(e.count)) / maxc), accent);
+            drawTextRight(fonts.mono, bx + bmax + 74, y, 14, dim, "{d:.1}%", .{p});
             y += 25;
         }
         y += 20;
@@ -390,8 +423,9 @@ const App = struct {
         var lb: [300]u8 = undefined;
         const base = std.fs.path.basename(self.path());
         const stripped = if (std.mem.endsWith(u8, base, ".shrimp")) base[0 .. base.len - ".shrimp".len] else base;
-        const label = std.fmt.bufPrint(&lb, "Decompress -> {s}", .{stripped}) catch "Decompress";
-        if (button(.{ .x = pad, .y = @floatFromInt(y), .width = 300, .height = 42 }, label, accent)) {
+        const label = std.fmt.bufPrint(&lb, "Decompress to {s}", .{stripped}) catch "Decompress";
+        const btn_w = @max(220, @as(i32, @intFromFloat(measureUi(label, 16))) + 48);
+        if (button(.{ .x = pad, .y = @floatFromInt(y), .width = @floatFromInt(btn_w), .height = 42 }, label, accent)) {
             self.decompress();
         }
         y += 58;

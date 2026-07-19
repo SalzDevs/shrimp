@@ -9,5 +9,8 @@ main.o
 # shrimp output files
 *.shrimp
 
+# GUI smoke-test screenshot
+shrimp-smoke.png
+
 # macOS
 .DS_Store
