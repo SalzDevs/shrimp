@@ -11,6 +11,15 @@ const pad = 28;
 
 const inter_ttf = @embedFile("fonts/Inter.ttf");
 const mono_ttf = @embedFile("fonts/JetBrainsMono.ttf");
+const logo_png = @embedFile("assets/logo.png");
+
+var logo_tex: rl.Texture2D = undefined;
+const white = col(255, 255, 255);
+
+/// Draw the logo at (x, y) scaled to `size` px (source is 500x500).
+fn drawLogo(x: f32, y: f32, size: f32) void {
+    rl.DrawTextureEx(logo_tex, .{ .x = x, .y = y }, 0, size / 500, white);
+}
 
 const Fonts = struct { ui: rl.Font, mono: rl.Font };
 var fonts: Fonts = undefined;
@@ -239,7 +248,8 @@ const App = struct {
     }
 
     fn drawHeader(self: *App) void {
-        drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
+        drawLogo(pad, 16, 36);
+        drawText(fonts.ui, pad + 46, 24, 28, accent, "shrimp", .{});
         if (self.view != .empty) {
             drawText(fonts.ui, winW() - pad - 220, 34, 13, dim, "drop another file to replace", .{});
         }
@@ -452,8 +462,9 @@ fn verifyRoundTrip(io: std.Io, gpa: std.mem.Allocator, src_path: []const u8, shr
 fn drawEmpty() void {
     const ww = winW();
     const wh = winH();
-    drawText(fonts.ui, pad, 24, 28, accent, "shrimp", .{});
-    drawText(fonts.ui, pad, 58, 13, dim, "binary file compressor and inspector", .{});
+    drawLogo(pad, 16, 36);
+    drawText(fonts.ui, pad + 46, 24, 28, accent, "shrimp", .{});
+    drawText(fonts.ui, pad + 46, 58, 13, dim, "binary file compressor and inspector", .{});
 
     const rect: rl.Rectangle = .{
         .x = pad,
@@ -464,8 +475,9 @@ fn drawEmpty() void {
     rl.DrawRectangleRounded(rect, 0.06, 12, panel);
     rl.DrawRectangleRoundedLines(rect, 0.06, 12, border);
 
-    drawCentered(fonts.ui, @divTrunc(wh, 2) - 50, 24, text_col, "Drop a file here", .{});
-    drawCentered(fonts.ui, @divTrunc(wh, 2) - 10, 14, dim, "any file is analyzed the moment it lands", .{});
+    drawLogo(@floatFromInt(@divTrunc(ww, 2) - 55), @floatFromInt(@divTrunc(wh, 2) - 130), 110);
+    drawCentered(fonts.ui, @divTrunc(wh, 2) - 10, 24, text_col, "Drop a file here", .{});
+    drawCentered(fonts.ui, @divTrunc(wh, 2) + 26, 14, dim, "any file is analyzed the moment it lands", .{});
     drawCentered(fonts.ui, @divTrunc(wh, 2) + 70, 13, dim, "entropy - histogram - predicted compressed size", .{});
 }
 
@@ -513,6 +525,17 @@ pub fn main(init: std.process.Init) !void {
         if (fonts.mono.texture.id != default_id) rl.UnloadFont(fonts.mono);
     }
 
+    var logo_ok = false;
+    const logo_img = rl.LoadImageFromMemory(".png", logo_png.ptr, @intCast(logo_png.len));
+    if (logo_img.data != null) {
+        rl.SetWindowIcon(logo_img);
+        logo_tex = rl.LoadTextureFromImage(logo_img);
+        rl.SetTextureFilter(logo_tex, rl.TEXTURE_FILTER_BILINEAR);
+        rl.UnloadImage(logo_img);
+        logo_ok = true;
+    }
+    defer if (logo_ok) rl.UnloadTexture(logo_tex);
+
     var app: App = .{ .io = init.io, .gpa = init.gpa };
     if (initial) |p| app.loadPath(p);
     if (smoke) app.details_open = true; // exercise the details/hex drawing paths
@@ -530,7 +553,8 @@ pub fn main(init: std.process.Init) !void {
         rl.EndDrawing();
 
         frames += 1;
-        if (smoke and frames >= 2) {
+        if (smoke and frames == 2) rl.TakeScreenshot("/tmp/shrimp-smoke.png");
+        if (smoke and frames >= 3) {
             // Headless smoke test: exercise the action of the current view.
             switch (app.view) {
                 .plain => {

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/assets/logo.png" width="160" alt="shrimp logo">
+</p>
+
 # shrimp
 
 A binary file compressor and inspector, written in Zig.
